@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPL Live Auction 2025</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        slate: { 850: '#151e2e', 900: '#0f172a' },
+                        neon: { green: '#4ade80', blue: '#38bdf8', red: '#f43f5e' }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style> body { font-family: 'Inter', sans-serif; background: #0f172a; color: white; } </style>
+</head>
+<body>
+
+    <div id="app" class="min-h-screen flex flex-col items-center justify-center p-4">
+        <h1 class="animate-pulse text-xl">Loading Auction System...</h1>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, doc, onSnapshot, updateDoc, runTransaction, setDoc, getDoc } 
+        from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        // ==========================================
+        // PASTE YOUR FIREBASE CONFIG HERE
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- GLOBAL STATE ---
+        let currentUser = null; // 'admin' or team object
+        let auctionState = { currentBid: 0, activePlayer: null, timerEnds: null };
+
+        // --- VIEW RENDERER ---
+        const render = () => {
+            const appDiv = document.getElementById('app');
+            
+            // VIEW 1: LOGIN SCREEN
+            if (!currentUser) {
+                appDiv.innerHTML = `
+                    <div class="max-w-md w-full bg-slate-800 p-8 rounded-2xl border border-slate-700 shadow-2xl text-center">
+                        <h1 class="text-3xl font-bold mb-2 text-neon-blue">🏏 Auction Login</h1>
+                        <p class="text-slate-400 mb-8">Select your role to enter the arena</p>
+                        
+                        <div class="space-y-4">
+                            <button onclick="window.enterAsAdmin()" class="w-full py-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold transition">
+                                🛡️ Enter as Auctioneer (Admin)
+                            </button>
+                            <div class="h-px bg-slate-700 my-4"></div>
+                            <h3 class="text-sm text-slate-500 uppercase">Select Team</h3>
+                            <div id="team-list" class="grid grid-cols-2 gap-3">
+                                </div>
+                        </div>
+                    </div>
+                `;
+                loadTeamsForLogin();
+                return;
+            }
+
+            // VIEW 2: ADMIN DASHBOARD
+            if (currentUser.role === 'admin') {
+                renderAdminView(appDiv);
+                return;
+            }
+
+            // VIEW 3: TEAM DASHBOARD
+            if (currentUser.role === 'team') {
+                renderTeamView(appDiv);
+                return;
+            }
+        };
+
+        // --- SUB-VIEWS ---
+        
+        // ADMIN VIEW
+        const renderAdminView = (container) => {
+            container.innerHTML = `
+                <div class="w-full max-w-6xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-bold text-slate-400">ADMIN PANEL</h2>
+                        <button onclick="window.location.reload()" class="text-sm text-red-400">Logout</button>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div class="bg-slate-800 p-6 rounded-3xl border border-slate-600 flex flex-col items-center text-center">
+                            ${auctionState.activePlayer ? `
+                                <img src="${auctionState.activePlayer.img}" class="w-40 h-40 rounded-full object-cover mb-4 border-4 border-neon-blue">
+                                <h2 class="text-3xl font-bold">${auctionState.activePlayer.name}</h2>
+                                <p class="text-slate-400 uppercase tracking-widest mb-6">${auctionState.activePlayer.role}</p>
+                                <div class="bg-slate-900 px-8 py-4 rounded-xl border border-neon-green">
+                                    <p class="text-sm text-slate-400">Current Bid</p>
+                                    <p class="text-5xl font-black text-neon-green">₹${auctionState.currentBid} CR</p>
+                                </div>
+                            ` : `<div class="text-slate-500 py-10">No Active Player</div>`}
+                        </div>
+
+                        <div class="flex flex-col gap-4">
+                            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700">
+                                <h3 class="mb-4 font-bold text-slate-300">Auction Controls</h3>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <button onclick="window.setNewPlayer()" class="bg-blue-600 hover:bg-blue-500 py-3 rounded-lg font-bold">Next Player</button>
+                                    <button onclick="window.resetTimer()" class="bg-slate-600 hover:bg-slate-500 py-3 rounded-lg font-bold">Reset Timer</button>
+                                    <button onclick="window.markSold()" class="col-span-2 bg-neon-green text-slate-900 hover:bg-emerald-400 py-4 rounded-lg font-bold text-xl mt-2">🔨 SOLD PLAYER</button>
+                                </div>
+                            </div>
+                            <div class="p-4 bg-black/30 rounded-xl text-sm font-mono text-slate-400">
+                                Highest Bidder: <span class="text-white">${auctionState.highestBidderName || 'None'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        // TEAM VIEW
+        const renderTeamView = (container) => {
+            const isWinning = auctionState.highestBidderId === currentUser.id;
+            
+            container.innerHTML = `
+                <div class="w-full max-w-md flex flex-col h-screen py-6">
+                    <div class="flex justify-between items-end mb-6 bg-slate-800 p-4 rounded-xl border ${isWinning ? 'border-neon-green' : 'border-slate-700'}">
+                        <div>
+                            <h2 class="font-bold text-lg">${currentUser.name}</h2>
+                            <p class="text-sm text-slate-400">Budget: <span class="text-white font-mono">₹${currentUser.budget.toFixed(2)} Cr</span></p>
+                        </div>
+                        <div class="text-right">
+                             ${isWinning 
+                                ? '<span class="px-3 py-1 bg-neon-green text-black font-bold text-xs rounded-full uppercase">Winning</span>' 
+                                : '<span class="px-3 py-1 bg-slate-700 text-slate-300 font-bold text-xs rounded-full uppercase">Waiting</span>'}
+                        </div>
+                    </div>
+
+                    <div class="flex-1 flex flex-col items-center justify-center bg-slate-800/50 rounded-3xl border border-slate-700 mb-6 relative overflow-hidden">
+                        ${auctionState.activePlayer ? `
+                            <div class="absolute top-4 right-4 text-slate-500 font-mono text-xs">LIVE</div>
+                            <img src="${auctionState.activePlayer.img}" class="w-32 h-32 rounded-full object-cover mb-4 border-2 border-slate-500">
+                            <h2 class="text-2xl font-bold">${auctionState.activePlayer.name}</h2>
+                            <div class="mt-6 text-center">
+                                <p class="text-slate-400 text-xs uppercase">Current Price</p>
+                                <p class="text-5xl font-black ${isWinning ? 'text-neon-green' : 'text-white'}">₹${auctionState.currentBid}</p>
+                            </div>
+                        ` : `<p class="text-slate-500">Waiting for Auctioneer...</p>`}
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <button onclick="window.placeBid(0.5)" ${isWinning ? 'disabled' : ''} class="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed py-6 rounded-2xl font-bold text-white shadow-lg transition active:scale-95">
+                            + 0.5 Cr
+                        </button>
+                        <button onclick="window.placeBid(1.0)" ${isWinning ? 'disabled' : ''} class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed py-6 rounded-2xl font-bold text-white shadow-lg transition active:scale-95">
+                            + 1.0 Cr
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- DATA LOGIC ---
+
+        // 1. Initial Setup (If DB is empty)
+        const loadTeamsForLogin = async () => {
+            // In a real app, you fetch this. For now, we hardcode buttons for the 6 teams
+            // You can manually add teams to Firestore or use a setup script
+            const teams = [
+                { id: 'team1', name: 'Royal Strikers' },
+                { id: 'team2', name: 'Super Kings' },
+                { id: 'team3', name: 'Mumbai Indians' },
+                { id: 'team4', name: 'Delhi Capitals' },
+                { id: 'team5', name: 'Punjab Kings' },
+                { id: 'team6', name: 'Gujarat Titans' }
+            ];
+            
+            const list = document.getElementById('team-list');
+            if(list) {
+                list.innerHTML = teams.map(t => `
+                    <button onclick="window.enterAsTeam('${t.id}', '${t.name}')" class="p-3 bg-slate-900 border border-slate-700 rounded-lg hover:border-neon-blue text-xs font-bold transition">
+                        ${t.name}
+                    </button>
+                `).join('');
+            }
+        }
+
+        // 2. Real-time Listeners
+        const startListeners = () => {
+            // Listen to Auction State
+            onSnapshot(doc(db, "auction", "status"), (doc) => {
+                if (doc.exists()) {
+                    auctionState = doc.data();
+                    render(); // Re-render whenever DB changes
+                }
+            });
+
+            // If I am a team, Listen to MY Budget
+            if(currentUser.role === 'team') {
+                onSnapshot(doc(db, "teams", currentUser.id), (doc) => {
+                    if (doc.exists()) {
+                        currentUser.budget = doc.data().budget;
+                        render();
+                    }
+                });
+            }
+        };
+
+        // --- GLOBAL WINDOW FUNCTIONS (Actions) ---
+
+        window.enterAsAdmin = () => {
+            currentUser = { role: 'admin' };
+            startListeners();
+            render();
+        };
+
+        window.enterAsTeam = async (id, name) => {
+            // Fetch initial budget
+            const teamDoc = await getDoc(doc(db, "teams", id));
+            let budget = 10.0;
+            
+            if (!teamDoc.exists()) {
+                // First time setup for team
+                await setDoc(doc(db, "teams", id), { name, budget: 10.0 });
+            } else {
+                budget = teamDoc.data().budget;
+            }
+
+            currentUser = { role: 'team', id, name, budget };
+            startListeners();
+            render();
+        };
+
+        window.placeBid = async (amount) => {
+            if(!currentUser || currentUser.role !== 'team') return;
+
+            const auctionRef = doc(db, "auction", "status");
+            const teamRef = doc(db, "teams", currentUser.id);
+
+            try {
+                await runTransaction(db, async (transaction) => {
+                    const auctionDoc = await transaction.get(auctionRef);
+                    const teamDoc = await transaction.get(teamRef);
+
+                    const newBid = auctionDoc.data().currentBid + amount;
+                    const teamBudget = teamDoc.data().budget;
+
+                    if (teamBudget < newBid) {
+                        alert("Not enough budget!");
+                        return;
+                    }
+
+                    transaction.update(auctionRef, {
+                        currentBid: newBid,
+                        highestBidderId: currentUser.id,
+                        highestBidderName: currentUser.name
+                    });
+                });
+            } catch (e) {
+                console.error("Bid failed", e);
+            }
+        };
+
+        window.setNewPlayer = async () => {
+            // HARDCODED DEMO PLAYER LIST (You can move this to Firestore 'players' collection)
+            const PLAYERS = [
+                { name: "Virat Kohli", role: "Batsman", img: "https://resources.pulse.icc-cricket.com/ICC/photo/2019/12/11/48271b4e-e145-4203-9118-2e008c279c65/Kohli.jpg" },
+                { name: "Jasprit Bumrah", role: "Bowler", img: "https://upload.wikimedia.org/wikipedia/commons/1/10/Jasprit_Bumrah_in_PMO_New_Delhi.jpg" },
+                { name: "Rohit Sharma", role: "Batsman", img: "https://upload.wikimedia.org/wikipedia/commons/f/f6/Rohit_Sharma_November_2016.jpg" }
+            ];
+            
+            const randomPlayer = PLAYERS[Math.floor(Math.random() * PLAYERS.length)];
+            
+            await updateDoc(doc(db, "auction", "status"), {
+                activePlayer: randomPlayer,
+                currentBid: 2.0, // Base Price
+                highestBidderId: null,
+                highestBidderName: null
+            });
+        };
+
+        window.markSold = async () => {
+            if(!auctionState.highestBidderId) return alert("No bids yet!");
+            
+            const teamId = auctionState.highestBidderId;
+            const price = auctionState.currentBid;
+            
+            // Deduct money
+            const teamRef = doc(db, "teams", teamId);
+            const teamDoc = await getDoc(teamRef);
+            
+            if(teamDoc.exists()) {
+                await updateDoc(teamRef, {
+                    budget: teamDoc.data().budget - price
+                });
+                alert(`SOLD to ${auctionState.highestBidderName} for ${price} Cr!`);
+                
+                // Clear active player
+                await updateDoc(doc(db, "auction", "status"), {
+                    activePlayer: null,
+                    currentBid: 0,
+                    highestBidderId: null
+                });
+            }
+        };
+
+        // Initial Render
+        render();
+
+    </script>
+</body>
+</html>
